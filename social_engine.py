@@ -9,32 +9,39 @@ from playwright.sync_api import sync_playwright
 app = Flask(__name__)
 CORS(app)
 
-# Sources de proxies publics "Elite" et "Anonymous"
-PROXY_SOURCES = [
-    "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=anonymous",
-    "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
-    "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt"
+# TA LISTE DE PROXIES (Injectée directement pour priorité maximale)
+MY_PROXIES = [
+    "46.249.103.192:443", "121.128.121.54:3128", "61.72.221.94:3128", "61.72.221.194:3128",
+    "14.56.177.44:3128", "61.72.110.94:3128", "173.249.5.133:1080", "185.100.232.163:11035",
+    "91.232.105.90:13545", "185.100.232.132:12443", "213.165.58.7:1080", "175.110.113.245:16801",
+    "190.2.150.45:11486", "212.34.135.86:5000", "109.236.88.88:12279", "91.229.23.128:11420",
+    "62.112.10.189:12460", "93.183.124.28:1080", "93.190.141.108:11997", "62.112.11.191:12611",
+    "109.236.84.70:12100", "109.236.94.58:11033", "93.190.138.89:12254", "134.119.214.69:12182",
+    "93.190.140.175:11481", "91.229.23.128:11495", "89.38.97.60:11385", "185.100.232.132:11547",
+    "62.112.11.77:11458", "89.38.98.64:12095", "159.223.53.194:1080", "91.232.105.4:12056",
+    "93.190.139.245:12059", "212.8.249.177:11220", "93.190.139.73:11747", "62.112.11.191:12136",
+    "93.190.141.73:11375", "109.236.84.37:11481", "194.233.68.54:1088", "89.38.99.47:11318",
+    "43.160.195.20:20005", "93.190.141.73:11884", "190.2.134.118:11949", "89.38.97.145:11118",
+    "62.112.11.41:11701", "109.236.94.37:12346", "62.112.11.191:11356", "104.248.197.67:1080",
+    "104.248.203.234:1080", "62.112.11.41:11874", "109.236.80.126:11132", "91.229.23.194:11803",
+    "91.229.23.194:11905", "91.232.105.69:12407", "93.190.141.112:11784", "93.190.143.27:11145",
+    "109.236.80.126:11176", "109.236.83.71:11353", "43.131.9.114:1777", "89.38.99.28:12251",
+    "190.2.132.231:11141", "109.236.81.34:11066", "109.236.82.247:11874", "134.119.205.55:11599",
+    "202.154.19.11:8082", "103.176.96.50:8082", "41.223.119.156:3128", "109.236.80.175:12396",
+    "89.39.107.223:11818", "95.143.190.56:12257", "190.2.134.28:11433", "62.112.9.200:12354",
+    "121.169.46.116:1090", "109.236.82.104:12294", "89.38.96.16:11028", "62.112.10.189:11391",
+    "89.39.107.223:11781", "62.112.11.191:15207", "62.112.10.200:11304", "62.112.10.200:11323",
+    "190.2.142.30:12180", "103.75.118.84:1080", "194.233.70.123:8080", "194.233.93.114:8080",
+    "194.233.74.238:8080", "194.233.73.195:8080", "109.236.85.78:11918", "134.199.159.23:1080",
+    "91.229.23.128:11228", "35.234.17.221:1080", "211.171.114.154:3128", "109.236.80.126:12149",
+    "58.69.182.53:8085", "62.112.10.200:11892", "119.93.207.214:8082", "95.190.193.74:3128"
 ]
 
-def get_live_proxy_list():
-    """Récupère et nettoie les listes de proxies"""
-    combined = []
-    for url in PROXY_SOURCES:
-        try:
-            r = requests.get(url, timeout=5)
-            if r.status_code == 200:
-                combined.extend(r.text.splitlines())
-        except:
-            continue
-    # Nettoyage (supprime les doublons et espaces)
-    return list(set([p.strip() for p in combined if ":" in p]))
-
 def is_proxy_alive(proxy_url):
-    """Vérifie si le proxy répond réellement à une requête simple"""
+    """Test réel de connectivité via Cloudflare"""
     try:
         proxies = {"http": f"http://{proxy_url}", "https": f"http://{proxy_url}"}
-        # Test sur un endpoint léger (Cloudflare)
-        r = requests.get("http://1.1.1.1", proxies=proxies, timeout=3)
+        r = requests.get("http://1.1.1.1", proxies=proxies, timeout=4)
         return r.status_code == 200
     except:
         return False
@@ -44,58 +51,50 @@ def create_account():
     data = request.json
     platform = data.get('platform', 'tiktok')
     
-    all_proxies = get_live_proxy_list()
-    random.shuffle(all_proxies)
+    # On mélange ta liste pour ne pas toujours tester les mêmes en premier
+    pool = list(MY_PROXIES)
+    random.shuffle(pool)
     
     tested_details = []
     
-    # On teste les 10 premiers proxies de la liste mélangée
-    for i in range(min(len(all_proxies), 10)):
-        proxy = all_proxies[i]
-        start_check = time.time()
+    # On teste les 15 premiers de ta liste
+    for i in range(min(len(pool), 15)):
+        proxy = pool[i]
+        start = time.time()
         
-        # ÉTAPE 1 : Vérification de "vie" (Alive Check)
-        alive = is_proxy_alive(proxy)
-        latency = round(time.time() - start_check, 2)
-        
-        if not alive:
-            tested_details.append({"ip": proxy, "status": "Mort/Timeout", "lat": latency})
+        # Log immédiat : Vérification réseau
+        if not is_proxy_alive(proxy):
+            tested_details.append({"ip": proxy, "status": "Inactif (Offline)", "lat": round(time.time()-start, 2)})
             continue
             
-        # ÉTAPE 2 : Tentative de navigation si le proxy est "Alive"
+        # Si vivant, on tente la navigation réelle
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True, args=['--no-sandbox', f'--proxy-server=http://{proxy}'])
-                context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0")
+                context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 page = context.new_page()
                 
-                target = "https://www.tiktok.com/signup" if platform == 'tiktok' else "https://www.instagram.com/"
+                target = "https://www.tiktok.com/signup" if platform == 'tiktok' else "https://www.instagram.com/accounts/emailsignup/"
                 
-                resp = page.goto(target, timeout=15000)
+                # Navigation avec timeout
+                resp = page.goto(target, timeout=20000, wait_until="networkidle")
+                lat = round(time.time() - start, 2)
+                
                 if resp and resp.status < 400:
                     browser.close()
-                    return jsonify({
-                        "success": True,
-                        "proxy": proxy,
-                        "latency": latency,
-                        "source": "Live Scrape",
-                        "details": tested_details # On renvoie aussi les échecs pour la console
-                    })
+                    return jsonify({"success": True, "proxy": proxy, "latency": lat, "status": resp.status})
                 else:
-                    tested_details.append({"ip": proxy, "status": f"Bloqué (HTTP {resp.status})", "lat": latency})
+                    status_text = f"Rejeté ({resp.status})" if resp else "Page Vide"
+                    tested_details.append({"ip": proxy, "status": status_text, "lat": lat})
                 browser.close()
         except Exception as e:
-            tested_details.append({"ip": proxy, "status": "Erreur Navigation", "lat": latency})
+            tested_details.append({"ip": proxy, "status": "Timeout Navigation", "lat": round(time.time()-start, 2)})
 
-    return jsonify({
-        "success": False,
-        "error": "Aucun proxy n'a passé le test de navigation.",
-        "details": tested_details
-    }), 500
+    return jsonify({"success": False, "error": "Aucun de vos proxies n'a pu charger la page.", "details": tested_details}), 500
 
 @app.route('/status')
 def status():
-    return jsonify({"status": "online", "proxies_available": len(get_live_proxy_list())})
+    return jsonify({"status": "online", "custom_proxy_count": len(MY_PROXIES)})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
