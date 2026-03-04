@@ -4,12 +4,12 @@ import random
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from playwright.sync_api import sync_playwright
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 CORS(app)
 
-# TA LISTE DE PROXIES (Injectée directement pour priorité maximale)
+# Ta liste de proxies
 MY_PROXIES = [
     "46.249.103.192:443", "121.128.121.54:3128", "61.72.221.94:3128", "61.72.221.194:3128",
     "14.56.177.44:3128", "61.72.110.94:3128", "173.249.5.133:1080", "185.100.232.163:11035",
@@ -20,81 +20,44 @@ MY_PROXIES = [
     "93.190.140.175:11481", "91.229.23.128:11495", "89.38.97.60:11385", "185.100.232.132:11547",
     "62.112.11.77:11458", "89.38.98.64:12095", "159.223.53.194:1080", "91.232.105.4:12056",
     "93.190.139.245:12059", "212.8.249.177:11220", "93.190.139.73:11747", "62.112.11.191:12136",
-    "93.190.141.73:11375", "109.236.84.37:11481", "194.233.68.54:1088", "89.38.99.47:11318",
-    "43.160.195.20:20005", "93.190.141.73:11884", "190.2.134.118:11949", "89.38.97.145:11118",
-    "62.112.11.41:11701", "109.236.94.37:12346", "62.112.11.191:11356", "104.248.197.67:1080",
-    "104.248.203.234:1080", "62.112.11.41:11874", "109.236.80.126:11132", "91.229.23.194:11803",
-    "91.229.23.194:11905", "91.232.105.69:12407", "93.190.141.112:11784", "93.190.143.27:11145",
-    "109.236.80.126:11176", "109.236.83.71:11353", "43.131.9.114:1777", "89.38.99.28:12251",
-    "190.2.132.231:11141", "109.236.81.34:11066", "109.236.82.247:11874", "134.119.205.55:11599",
-    "202.154.19.11:8082", "103.176.96.50:8082", "41.223.119.156:3128", "109.236.80.175:12396",
-    "89.39.107.223:11818", "95.143.190.56:12257", "190.2.134.28:11433", "62.112.9.200:12354",
-    "121.169.46.116:1090", "109.236.82.104:12294", "89.38.96.16:11028", "62.112.10.189:11391",
-    "89.39.107.223:11781", "62.112.11.191:15207", "62.112.10.200:11304", "62.112.10.200:11323",
-    "190.2.142.30:12180", "103.75.118.84:1080", "194.233.70.123:8080", "194.233.93.114:8080",
-    "194.233.74.238:8080", "194.233.73.195:8080", "109.236.85.78:11918", "134.199.159.23:1080",
-    "91.229.23.128:11228", "35.234.17.221:1080", "211.171.114.154:3128", "109.236.80.126:12149",
-    "58.69.182.53:8085", "62.112.10.200:11892", "119.93.207.214:8082", "95.190.193.74:3128"
+    "93.190.137.73:11375", "109.236.84.37:11481", "194.233.68.54:1088", "89.38.99.47:11318"
 ]
 
-def is_proxy_alive(proxy_url):
-    """Test réel de connectivité via Cloudflare"""
+def check_one_proxy(proxy):
+    """Vérifie un proxy unique et renvoie son statut"""
+    start = time.time()
     try:
-        proxies = {"http": f"http://{proxy_url}", "https": f"http://{proxy_url}"}
-        r = requests.get("http://1.1.1.1", proxies=proxies, timeout=4)
-        return r.status_code == 200
+        proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
+        # On interroge un service ultra-léger pour tester la vie
+        r = requests.get("http://azenv.net/", proxies=proxies, timeout=3)
+        lat = round(time.time() - start, 2)
+        if r.status_code == 200:
+            return {"ip": proxy, "status": "ALIVE", "lat": lat, "code": 200}
+        return {"ip": proxy, "status": "DEATH", "lat": lat, "code": r.status_code}
     except:
-        return False
+        return {"ip": proxy, "status": "DEATH", "lat": 3.0, "code": "Timeout"}
 
 @app.route('/create-account', methods=['POST'])
-def create_account():
-    data = request.json
-    platform = data.get('platform', 'tiktok')
+def bulk_check():
+    # On prend 20 proxies au hasard dans ta liste
+    test_sample = random.sample(MY_PROXIES, min(len(MY_PROXIES), 20))
     
-    # On mélange ta liste pour ne pas toujours tester les mêmes en premier
-    pool = list(MY_PROXIES)
-    random.shuffle(pool)
+    # On utilise le multi-threading pour tester tout le monde en même temps (très rapide)
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(check_one_proxy, test_sample))
     
-    tested_details = []
+    # On sépare les vivants des morts pour le retour
+    alive_count = len([r for r in results if r['status'] == 'ALIVE'])
     
-    # On teste les 15 premiers de ta liste
-    for i in range(min(len(pool), 15)):
-        proxy = pool[i]
-        start = time.time()
-        
-        # Log immédiat : Vérification réseau
-        if not is_proxy_alive(proxy):
-            tested_details.append({"ip": proxy, "status": "Inactif (Offline)", "lat": round(time.time()-start, 2)})
-            continue
-            
-        # Si vivant, on tente la navigation réelle
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True, args=['--no-sandbox', f'--proxy-server=http://{proxy}'])
-                context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                page = context.new_page()
-                
-                target = "https://www.tiktok.com/signup" if platform == 'tiktok' else "https://www.instagram.com/accounts/emailsignup/"
-                
-                # Navigation avec timeout
-                resp = page.goto(target, timeout=20000, wait_until="networkidle")
-                lat = round(time.time() - start, 2)
-                
-                if resp and resp.status < 400:
-                    browser.close()
-                    return jsonify({"success": True, "proxy": proxy, "latency": lat, "status": resp.status})
-                else:
-                    status_text = f"Rejeté ({resp.status})" if resp else "Page Vide"
-                    tested_details.append({"ip": proxy, "status": status_text, "lat": lat})
-                browser.close()
-        except Exception as e:
-            tested_details.append({"ip": proxy, "status": "Timeout Navigation", "lat": round(time.time()-start, 2)})
-
-    return jsonify({"success": False, "error": "Aucun de vos proxies n'a pu charger la page.", "details": tested_details}), 500
+    return jsonify({
+        "success": alive_count > 0,
+        "details": results,
+        "summary": f"{alive_count} proxies vivants sur {len(results)} testés"
+    })
 
 @app.route('/status')
 def status():
-    return jsonify({"status": "online", "custom_proxy_count": len(MY_PROXIES)})
+    return jsonify({"status": "online", "mode": "fast_checker"})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
