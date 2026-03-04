@@ -1,15 +1,16 @@
 import os
 import time
-import random
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from concurrent.futures import ThreadPoolExecutor
 
+# Installation automatique des supports SOCKS pour Railway
+# Note: Railway nécessite 'requests[socks]' dans requirements.txt
+
 app = Flask(__name__)
 CORS(app)
 
-# Ta liste complète de proxies
 MY_PROXIES = [
     "46.249.103.192:443", "121.128.121.54:3128", "61.72.221.94:3128", "61.72.221.194:3128",
     "14.56.177.44:3128", "61.72.110.94:3128", "173.249.5.133:1080", "185.100.232.163:11035",
@@ -38,24 +39,39 @@ MY_PROXIES = [
 ]
 
 def check_one_proxy(proxy):
-    """Vérifie un proxy via azenv.net (test d'anonymat rapide)"""
+    """Vérifie un proxy avec plusieurs protocoles et un timeout plus long"""
     start = time.time()
-    try:
-        proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
-        # Timeout court (3s) pour ne pas bloquer le scan total
-        r = requests.get("http://azenv.net/", proxies=proxies, timeout=3)
-        lat = round(time.time() - start, 2)
-        if r.status_code == 200:
-            return {"ip": proxy, "status": "ALIVE", "lat": lat}
-        return {"ip": proxy, "status": "DEATH", "lat": lat}
-    except:
-        return {"ip": proxy, "status": "DEATH", "lat": 3.0}
+    
+    # On va tester HTTP et SOCKS5
+    protocols = [
+        f"http://{proxy}",
+        f"socks5://{proxy}",
+        f"socks4://{proxy}"
+    ]
+    
+    for proto_url in protocols:
+        try:
+            proxies = {"http": proto_url, "https": proto_url}
+            # Timeout augmenté à 8s (standard pro)
+            # On teste Google qui est la référence absolue de connectivité
+            r = requests.get("https://www.google.com", proxies=proxies, timeout=8)
+            
+            if r.status_code == 200:
+                return {
+                    "ip": proxy, 
+                    "status": "ALIVE", 
+                    "lat": round(time.time() - start, 2),
+                    "proto": proto_url.split(":")[0]
+                }
+        except:
+            continue
+            
+    return {"ip": proxy, "status": "DEATH", "lat": round(time.time() - start, 2)}
 
 @app.route('/create-account', methods=['POST'])
 def full_check():
-    # SCAN DE TOUTE LA LISTE
-    # On monte à 30 workers pour paralléliser massivement le scan
-    with ThreadPoolExecutor(max_workers=30) as executor:
+    # Parallélisation massive (50 threads)
+    with ThreadPoolExecutor(max_workers=50) as executor:
         results = list(executor.map(check_one_proxy, MY_PROXIES))
     
     alive_count = len([r for r in results if r['status'] == 'ALIVE'])
@@ -68,7 +84,7 @@ def full_check():
 
 @app.route('/status')
 def status():
-    return jsonify({"status": "online", "mode": "full_checker", "total_proxies": len(MY_PROXIES)})
+    return jsonify({"status": "online", "mode": "ultra_checker", "total_proxies": len(MY_PROXIES)})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
